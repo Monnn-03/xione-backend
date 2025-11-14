@@ -29,7 +29,7 @@ class PruneOldBookings extends Command
         
         // 2. Tentukan batas waktu (kita tetap pakai 'Asia/Jakarta'
         //    untuk memastikan zona waktu 100% benar)
-        $fiveMinutesAgo = Carbon::now('Asia/Jakarta')->subMinutes(5);
+        $fiveMinutesAgo = Carbon::now('Asia/Jakarta')->subMinutes(15);
 
         // 3. Cari dan Hapus
         $deletedCount = Booking::where('status', 'pending')
