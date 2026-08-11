@@ -1,59 +1,226 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# ⚙️ Xione Theatre Ticketing System - Backend
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+REST API for Xione Theatre Ticketing System, built to handle seat reservation, booking management, and admin operations for an annual theatre ticketing event.
 
-## About Laravel
+> Frontend repository: [xione-frontend](https://github.com/Monnn-03/xione-frontend)
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+---
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Features
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+- **Admin Authentication** — token-based login using Laravel Sanctum
+- **Seat Availability** — public endpoint listing all seats and their current status
+- **Seat Reservation** — instant seat locking; a seat becomes unavailable to other guests as soon as a booking is created, pending admin confirmation
+- **Auto-Cancellation (Smart-timer)** — a scheduled console command (`app:prune-bookings-v2`) runs every minute and removes `pending` bookings older than 15 minutes, automatically freeing the seat back up
+- **Admin Booking Management** — view all bookings, confirm or reject pending ones
 
-## Learning Laravel
+---
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+## Tech Stack
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+- PHP 8.2
+- Laravel 12.0
+- Laravel Sanctum 4.0 (Authentication)
+- MySQL
+- REST API
+- Laravel Task Scheduling (for smart-timer auto-cancellation)
 
-## Laravel Sponsors
+---
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+## Architecture
 
-### Premium Partners
+```
+Routes
+  ↓
+Controllers
+  ↓
+Services
+  ↓
+Models
+  ↓
+Database
+```
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+---
 
-## Contributing
+## ⏱ Key Technical Highlight: Seat Reservation & Smart-timer Auto-Cancellation
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+To prevent two guests from booking the same seat and to avoid a seat being locked indefinitely by a booking that's never confirmed by an admin, seat reservation is handled with the following approach:
 
-## Code of Conduct
+**1. Availability check wrapped in a database transaction**
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+```php
+$booking = DB::transaction(function () use ($validated, $seatIds, &$totalPrice) {
 
-## Security Vulnerabilities
+    $bookedSeats = Seat::whereIn('id', $seatIds)
+        ->whereIn('id', function ($query) {
+            $query->select('seat_id')
+                ->from('booking_seat')
+                ->join('bookings', 'bookings.id', '=', 'booking_seat.booking_id')
+                ->where('bookings.status', 'confirmed')
+                ->orWhere(function ($q) {
+                    $q->where('bookings.status', 'pending')
+                      ->where('bookings.created_at', '>', Carbon::now()->subMinutes(15));
+                });
+        })->pluck('label');
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+    if ($bookedSeats->isNotEmpty()) {
+        throw new \Exception("Maaf, kursi " . $bookedSeats->implode(', ') . " sudah terisi.");
+    }
+
+    // ...create booking, attach seats
+});
+```
+
+A seat is considered unavailable if it belongs to either a `confirmed` booking, or a `pending` booking created within the last 15 minutes — matching the auto-cancellation window below, so a seat is never shown as available while its hold is still active.
+
+**2. Scheduled auto-cancellation for abandoned bookings**
+
+```php
+class PruneOldBookings extends Command
+{
+    protected $signature = 'app:prune-bookings-v2';
+
+    public function handle()
+    {
+        $expiredThreshold = Carbon::now('Asia/Jakarta')->subMinutes(15);
+
+        $deletedCount = Booking::where('status', 'pending')
+            ->where('created_at', '<=', $expiredThreshold)
+            ->delete();
+    }
+}
+```
+
+Scheduled via `routes/console.php`:
+
+```php
+Schedule::command('app:prune-bookings-v2')->everyMinute();
+```
+
+Every minute, the scheduler checks for `pending` bookings older than 15 minutes and deletes them, freeing the seat back up for other guests — without requiring a queue/job system.
+
+**Known limitation:** the availability check above does not currently use row-level locking (`lockForUpdate()`) on the seat query. `DB::transaction()` guarantees the booking creation is atomic and rollback-safe, but it does not by itself lock the rows being read — so in a narrow window (near-simultaneous requests within milliseconds), two guests could theoretically both pass the availability check before either insert completes. Given the system serves a single annual event with a modest number of concurrent users, this risk is low in practice, but a stricter fix (row locking or a unique constraint) would close the gap entirely.
+
+---
+
+## Installation
+
+```bash
+git clone https://github.com/Monnn-03/xione-ticketing-backend.git
+
+cd xione-ticketing-backend
+
+composer install
+
+cp .env.example .env
+
+php artisan key:generate
+
+php artisan migrate
+
+php artisan serve
+```
+
+To keep the smart-timer running locally, also run the scheduler:
+
+```bash
+php artisan schedule:work
+```
+
+---
+
+## API Documentation
+
+### Public
+
+```
+GET    /api/seats              List all seats and availability
+POST   /api/bookings           Create a new booking (guest reservation)
+POST   /api/admin/login        Admin login
+```
+
+### Admin (requires `auth:sanctum`)
+
+```
+GET    /api/admin/bookings              Get all bookings
+PUT    /api/admin/bookings/{id}/confirm Confirm a pending booking
+DELETE /api/admin/bookings/{id}         Reject / delete a booking
+POST   /api/admin/logout                Admin logout
+GET    /api/admin/user                  Get currently authenticated admin
+```
+
+### Example: Create Booking
+
+```
+POST /api/bookings
+
+Request Body:
+{
+  "customer_name": "Budi Santoso",
+  "customer_whatsapp": "081234567890",
+  "payment_method": "online",
+  "seats": [12, 13]
+}
+
+Response (201):
+{
+  "message": "Pesanan berhasil dibuat!",
+  "booking_id": 45
+}
+
+Response (409 - seat already taken):
+{
+  "message": "Maaf, kursi A12 sudah terisi."
+}
+```
+
+Note: only admin actions require authentication (Sanctum). Guest booking creation is a public endpoint, with the seat immediately locked upon submission pending admin review.
+
+---
+
+## Database
+
+ERD
+
+![ERD](images/erd.png)
+
+---
+
+## Environment Variables
+
+Key variables to configure in `.env` (see `.env.example` for the full list):
+
+```
+DB_CONNECTION=mysql
+DB_DATABASE=
+DB_USERNAME=
+DB_PASSWORD=
+```
+
+The application uses Laravel's default session, queue, and cache drivers (`database`), so no additional service configuration (Redis, S3, mail provider) is required to run the project locally.
+
+---
+
+## Connected Frontend
+
+https://github.com/Monnn-03/xione-frontend
+
+---
+
+## My Contribution
+
+- Designed REST API
+- Developed business logic
+- Built seat reservation & instant locking mechanism
+- Implemented smart-timer auto-cancellation for expired pending bookings
+- Built admin booking management (confirm/reject flow)
+- Database design
+- Authentication (Laravel Sanctum)
+- Deployment
+
+---
 
 ## License
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+This is a proprietary project developed for a client. Source code is shared here for portfolio purposes only, with permission from the client.
