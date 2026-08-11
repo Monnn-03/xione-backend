@@ -24,7 +24,7 @@ class BookingController extends Controller
             ->where('bookings.status', 'confirmed')
             ->orWhere(function($query) {
                 $query->where('bookings.status', 'pending')
-                      ->where('bookings.created_at', '>', Carbon::now()->subMinutes(5));
+                      ->where('bookings.created_at', '>', Carbon::now()->subMinutes(15));
             })
             ->pluck('booking_seat.seat_id');
 
@@ -107,7 +107,7 @@ class BookingController extends Controller
                             ->where('bookings.status', 'confirmed')
                             ->orWhere(function($q) {
                                 $q->where('bookings.status', 'pending')
-                                ->where('bookings.created_at', '>', Carbon::now()->subMinutes(5));
+                                ->where('bookings.created_at', '>', Carbon::now()->subMinutes(15));
                             });
                     })->pluck('label');
 
