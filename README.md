@@ -107,9 +107,9 @@ Every minute, the scheduler checks for `pending` bookings older than 15 minutes 
 ## Installation
 
 ```bash
-git clone https://github.com/Monnn-03/xione-ticketing-backend.git
+git clone https://github.com/Monnn-03/xione-backend.git
 
-cd xione-ticketing-backend
+cd xione-backend
 
 composer install
 
